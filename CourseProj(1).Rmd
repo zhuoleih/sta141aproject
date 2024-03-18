@@ -1,0 +1,284 @@
+---
+title: "Course Project"
+author: '920109324'
+date: "2024-03-01"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F, echo=F)
+library(tidyverse)
+```
+
+
+## Abstract
+This study explores the brain's decision-making processes by analyzing brain scan data during various tests, aiming to predict outcomes using this information. Utilizing logistic regression, decision trees, and random forests, we analyzed signals from brain activity. Significant predictors included contrast levels, mouse names, and specific neural activity metrics. Models showed moderate accuracy in prediction, with logistic regression achieving around 71% accuracy on both training and test data sets. This research enhances our understanding of how the brain processes information and makes decisions, demonstrating the potential of machine learning in neuro scientific predictions.
+
+## Introduction
+In our project, we dive into the brain's decision-making by looking at brain activity and visual clues. We aim to predict the results of tests based on this information. We use data from brain scans during different tests for our study. By exploring this data, we hope to understand how the brain reacts and decides under various conditions.
+
+To make our predictions, we use basic computer models like logistic regression, decision trees, and random forests. These models help us guess the outcomes of tests by analyzing the brain's signals. This approach is not just about guessing right; it's about uncovering how our brain processes information and makes decisions.
+
+## Exploratory analysis
+Reading data from the RDS files.
+```{r}
+session=list()
+for(i in 1:18){
+  session[[i]]=readRDS(paste('./Data/session',i,'.rds',sep=''))
+}
+```
+
+
+```{r}
+total_neurons = c()
+total_trials = c()
+stimuli_conditions = list()
+feedback_types = list()
+number_of_brain_areas <- c()
+mouse_names <- c()
+data <- list()
+for(i in 1:length(session)) {
+  total_neurons[i] = unique(unlist(lapply(session[[i]]$spks, function(x) dim(x)[1])))
+  total_trials[i] = length(session[[i]]$feedback_type)
+  stimuli_conditions[[i]] = paste(session[[i]]$contrast_left, session[[i]]$contrast_right, sep="-")
+  feedback_types[[i]] = session[[i]]$feedback_type
+  number_of_brain_areas[i] <- length(unique(session[[i]]$brain_area))
+  mouse_names[i] <-session[[i]]$mouse_name
+  s <- session[[i]]
+  df <- data.frame(
+    contrast_left=s$contrast_left,
+    contrast_right=s$contrast_right,
+    feedback_type=s$feedback_type,
+    mouse_name = s$mouse_name
+    )
+  data[[i]] <- df
+}
+data <- do.call("rbind", data)
+```
+
+There are four mouses in the data, the Cori occurred in 3 sessions, the Forssmann occurred in 4 sessions, the Hench occurred in 4 sessions and the Lederberg occurred in 7 sessions.
+
+```{r results='hide'}
+table(mouse_names)
+```
+
+```{r}
+df <- as.data.frame(table(mouse_names))
+ggplot(df, aes(x=mouse_names, y=Freq)) + geom_col(fill="cornflowerblue") +
+  labs(x="Mouse name", y="Frequency")
+```
+
+
+The average number of total neurons is 905.8, the minimum number is 474, the maximum number is 1769, the median number is 822.5. The distribution of the total neurons is right skewed.
+
+
+```{r}
+ggplot(data.frame(total_neurons), aes(x=total_neurons)) + 
+  geom_histogram(fill="cornflowerblue",
+                 color="white", bins=10) +
+  labs(title="Histogram of total neurons", x="Total Neurons")
+```
+
+The average number of total trials is 282.3, the median number is 261.0, the minimum number is 114, the maximum number is 447. The distribution of the total trials is a bit right skewed.
+
+```{r}
+ggplot(data.frame(total_trials), aes(x=total_trials)) + 
+  geom_histogram(fill="cornflowerblue",
+                 color="white", bins=10) +
+  labs(title="Histogram of total trials", x="Total trials")
+```
+
+```{r results='hide'}
+summary(total_trials)
+```
+
+```{r}
+ggplot(data.frame(mouse_names, number_of_brain_areas), 
+       aes(x=mouse_names,  y=number_of_brain_areas)) +
+  geom_boxplot() +
+  labs(x="Mouse name", y="Number of brain areas")
+```
+
+The box plot suggests that the Hench has a higher average number of brain areas compared with other three mice, the Cori has the lowest average number of brain areas among the four mice.
+
+```{r}
+success_rate = sapply(feedback_types, function(x){mean(x==1)})
+ggplot(data.frame(mouse_names, success_rate), 
+       aes(x=mouse_names,  y=success_rate)) +
+  geom_boxplot() +
+  labs(x="Mouse name", y="Success rate")
+```
+
+The Lederberg has the highest success rate, the Cori has the lowest success rate among the four mice.
+
+```{r warning=F, message=F}
+library(tidyverse)
+data$condition <- paste0(data$contrast_left, "-", data$contrast_right)
+df <- data %>% group_by(condition) %>% summarise(p=mean(feedback_type==1)) 
+ggplot(df, aes(x=p, y=condition)) + geom_col(fill="cornflowerblue") +
+  labs(x="Success rate", y="Condition")
+```
+
+## Data integration
+Combine data across trials, calculate the overall average spike count, average row (neuron) mean, row maximum and minimum, average column (time bin) mean, standard deviation, and total spike count. These calculations aim to capture different aspects of the neural activity, such as its central tendency, variability, and range, both across neurons and time bins. 
+```{r}
+data <- list()
+for(i in 1:length(session)) {
+  s <- session[[i]]
+  df <- data.frame(
+    contrast_left=s$contrast_left,
+    contrast_right=s$contrast_right,
+    feedback_type=s$feedback_type,
+    mouse_name = s$mouse_name,
+    average = sapply(s$spks, mean),
+    row.avg.max = sapply(s$spks, function(x){ max(colMeans(x))}),
+    row.avg.min = sapply(s$spks, function(x){ min(colMeans(x))}),
+    row.sum.max = sapply(s$spks, function(x){ max(colSums(x))}),
+    row.sum.min = sapply(s$spks, function(x){ min(colSums(x))}),
+    row.sum.avg = sapply(s$spks, function(x){ mean(colSums(x))}),
+    sd = sapply(s$spks, sd),
+    total = sapply(s$spks, sum),
+    total.max = sapply(s$spks, max)
+    )
+  data[[i]] <- df
+}
+data <- do.call("rbind", data)
+data$contrast_left <- factor(data$contrast_left)
+data$contrast_right <- factor(data$contrast_right)
+data$feedback_type <- factor(data$feedback_type)
+```
+
+
+## Predictive modeling
+### Split the data into train and test
+Split the data set into training and testing subsets,randomly selects 70% of the data set's rows to form the training set,the remaining 30% of the rows are allocated to the testing set.
+
+```{r}
+set.seed(123)
+id <- sample(1:nrow(data), nrow(data)*0.7)
+train <- data[id, ]
+test <- data[-id, ]
+```
+
+
+### Logistic Regression
+Logistic regression analysis is a statistical technique to evaluate the relationship between various predictor variables and an outcome which is binary. Since the feedback_type is a binary variable, we can apply logistic regression here.
+
+```{r comment=NA}
+library(stargazer)
+model <- glm(feedback_type~., train, family="binomial")
+stargazer(model, header=F, title = "Result of logistic regression", type="text")
+```
+
+The contrast, mouse name, average, row.min and total are significant in the model.
+
+Make predictions on the train is 0.714.
+
+```{r results='hide'}
+probs <- predict(model, train, type="response")
+preds <- ifelse(probs>0.5, 1, -1)
+mean(preds==train$feedback_type)
+```
+
+The accuracy on the test data is 0.708.
+
+```{r results='hide'}
+probs <- predict(model, test, type="response")
+preds <- ifelse(probs>0.5, 1, -1)
+mean(preds==test$feedback_type)
+```
+### Decision Tree
+
+A decision tree is a non-parametric supervised learning algorithm, which is utilized for both classification and regression tasks. It has a hierarchical, tree structure, which consists of a root node, branches, internal nodes and leaf nodes.
+
+```{r}
+library(rpart)
+library(rpart.plot)
+dt <- rpart(feedback_type~., train)
+rpart.plot(dt)
+```
+
+The most important predictors are: sd, mouse name and contrast_right. The root node indicates that out of these samples, 1030 belong to class 1 and 2526 belong to class -1, with class probabilities of 0.29 and 0.71 respectively. The tree then splits based on the standard deviation (sd) feature, where if sd is less than 0.1938058, it further splits based on the mouse_name feature. For samples with mouse_name as Cori or Hench, the model predicts class -1 if contrast_right is 0.25, 0.5, or 1, and class 1 if contrast_right is 0. For samples with mouse_name as Forssmann or Lederberg, the model predicts class 1. If sd is greater than or equal to 0.1938058, the model predicts class 1. This description outlines how the decision tree makes splits based on features to classify the samples into different classes.
+
+```{r results='hide'}
+preds <- predict(dt, train, type="class")
+mean(preds==train$feedback_type)
+preds <- predict(dt, test, type="class")
+mean(preds==test$feedback_type)
+```
+The train accuracy is 0.727, the test accuracy is 0.717.
+
+
+### Random Forest model
+
+Random forest is a commonly-used machine learning algorithm, trademarked by Leo Breiman and Adele Cutler, that combines the output of multiple decision trees to reach a single result. Its ease of use and flexibility have fueled its adoption, as it handles both classification and regression problems.
+
+```{r warning=F, message=F, comment=NA}
+library(randomForest)
+rf <- randomForest(feedback_type~., train)
+rf
+```
+```{r}
+varImpPlot(rf)
+```
+
+The most important predictors are: sd, average, row.sum.avg, total and row.avg.max.
+
+```{r results='hide'}
+preds <- predict(rf, train)
+mean(preds==train$feedback_type)
+preds <- predict(rf, test)
+mean(preds==test$feedback_type)
+```
+
+The train accuracy is 1, the test accuracy is 0.713, so the model is over fit.
+
+## Prediction performance on the test sets
+Extract the features from the test data, then make a prediction and calculate the accuracy for the three models.
+```{r results='hide'}
+test1 <- readRDS("test/test1.rds")
+test2 <- readRDS("test/test2.rds")
+session <- list(test1, test2)
+
+test <- list()
+for(i in 1:length(session)) {
+  s <- session[[i]]
+  df <- data.frame(
+    contrast_left=s$contrast_left,
+    contrast_right=s$contrast_right,
+    feedback_type=s$feedback_type,
+    mouse_name = s$mouse_name,
+    average = sapply(s$spks, mean),
+    row.avg.max = sapply(s$spks, function(x){ max(colMeans(x))}),
+    row.avg.min = sapply(s$spks, function(x){ min(colMeans(x))}),
+    row.sum.max = sapply(s$spks, function(x){ max(colSums(x))}),
+    row.sum.min = sapply(s$spks, function(x){ min(colSums(x))}),
+    row.sum.avg = sapply(s$spks, function(x){ mean(colSums(x))}),
+    sd = sapply(s$spks, sd),
+    total = sapply(s$spks, sum),
+    total.max = sapply(s$spks, max)
+    )
+  test[[i]] <- df
+}
+test <- do.call("rbind", test)
+test$contrast_left <- factor(test$contrast_left)
+test$contrast_right <- factor(test$contrast_right)
+test$feedback_type <- factor(test$feedback_type)
+preds <- predict(dt, test, type="class")
+mean(preds==test$feedback_type)
+
+preds <- predict(rf, test)
+mean(preds==test$feedback_type)
+
+probs <- predict(model, test, type="response")
+preds <- ifelse(probs>0.5, 1, -1)
+mean(preds==test$feedback_type)
+```
+The evaluation results show that the decision tree model achieved the highest accuracy at 74%, followed by the random forest at 73.5% and the logistic regression at 73%. These accuracies indicate the performance of each model in predicting feedback types based on the features in the data set, with the logistic regression model exhibiting the best predictive capability among the three models tested.
+
+
+## Discussion
+
+Based on the analysis above, we found that the decision tree model performed the best with 74% accuracy. These findings demonstrate the potential of machine learning in understanding how the brain processes information and makes decisions. However, it is essential to acknowledge the limitations of our study, there is only a few features extracted from the data. Further research could focus on refining the models and exploring additional features to enhance predictive accuracy and deepen insights into neural decision-making processes.
